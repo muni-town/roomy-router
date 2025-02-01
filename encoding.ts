@@ -6,14 +6,16 @@ export const routerMessageHeader = z.tuple([
   z.literal("join").or(z.literal("leave")).or(z.literal("send")),
   // The DID of the peer involved
   z.string(),
+  // The connection ID involved
+  z.optional(z.nullable(z.string())),
 ]);
 
 export type PeerMessageHeader = z.infer<typeof peerMessageHeader>;
 export const peerMessageHeader = z.union([
   // Sets the peers that this peer is interested in getting "join" and "leave" messages from.
   z.tuple([z.literal("listen")]).rest(z.string()),
-  // Sends a message to another peer
-  z.tuple([z.literal("send"), z.string()]),
+  // Sends a message to another peer's ( did, connectionId )
+  z.tuple([z.literal("send"), z.string(), z.string()]),
   // Asks whether another user is online without adding them to the "listen" list.
   // This will cause a "join" or "leave" message to be sent back by the router.
   z.tuple([z.literal("ask"), z.string()]),
@@ -28,9 +30,9 @@ const sizeOfU32 = 4;
 
 export function parseRawMessage<T>(data: ArrayBuffer): RawMessage<T> {
   const headerLength = new DataView(data).getUint32(0, true);
-  const header = JSON.parse(
-    new TextDecoder().decode(data.slice(sizeOfU32, headerLength))
-  ) as T;
+  const headerSlice = data.slice(sizeOfU32, sizeOfU32 + headerLength);
+  const headerTxt = new TextDecoder().decode(headerSlice);
+  const header = JSON.parse(headerTxt) as T;
 
   return {
     header,
@@ -60,8 +62,9 @@ export function parseMessageWithSchema<T>(
   } catch (_) {
     return new Error(errorMsg);
   }
-  const header = schema.safeParse(rawMessage);
-  if (header.error || !header.data) return new Error(errorMsg);
+  const header = schema.safeParse(rawMessage.header);
+  if (header.error || !header.data)
+    return new Error(`${errorMsg}: ${header.error}`);
 
   return [header.data, rawMessage.body];
 }

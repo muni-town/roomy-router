@@ -58,30 +58,32 @@ router.get("/.well-known/did.json", ({ url }) => ({
 }));
 
 /** All of the open peer connections. */
-const peers: { [did: string]: Peer } = {};
+const peerConns: { [did: string]: { [connId: string]: Peer } } = {};
 
 /** Handles the connection to a peer. */
 class Peer {
   socket: WebSocket;
   did: string;
+  connId: string;
   /** The list of DIDs that the user wants to receive "join" and "leave" messages for. */
   listeningTo: string[] = [];
 
-  constructor(did: string, socket: WebSocket) {
+  constructor(did: string, connId: string, socket: WebSocket) {
     this.did = did;
+    this.connId = connId;
     this.socket = socket;
     this.socket.binaryType = "arraybuffer";
 
     socket.addEventListener("message", (e) => {
       if (e.data instanceof ArrayBuffer) {
-        this.handleMessage(e.data);
+        this.#handleMessage(e.data);
       } else if (typeof e.data == "string") {
-        this.handleMessage(new TextEncoder().encode(e.data));
+        this.#handleMessage(new TextEncoder().encode(e.data));
       }
     });
   }
 
-  handleMessage(buffer: ArrayBuffer) {
+  #handleMessage(buffer: ArrayBuffer) {
     const msg = parsePeerMessage(buffer);
     if (msg instanceof Error) {
       console.warn(`Error parsing message for ${this.did}`);
@@ -97,31 +99,39 @@ class Peer {
     // Asking for other peer's status
     else if (kind == "ask") {
       const [did] = params;
-      this.sendJoinLeave(did, peers[did] ? "join" : "leave");
+      const connections = peerConns[did];
+      if (Object.keys(connections || {}).length == 0) {
+        this.sendJoinLeave("leave", did);
+      } else {
+        for (const connId of Object.keys(connections)) {
+          this.sendJoinLeave("join", did, connId);
+        }
+      }
     }
 
     // Sending another peer a message
     else if (kind == "send") {
-      const [did] = params;
-      const peer = peers[did];
-      // Forward data to the other peer
-      if (peer) peer.sendData(this.did, data);
+      const [did, connId] = params;
+      // Forward data to the other peer's connection
+      peerConns[did]?.[connId]?.sendData(this.did, connId, data);
     }
   }
 
-  sendJoinLeave(did: string, status: "join" | "leave") {
-    encodeRawMessage<RouterMessageHeader>({
-      // Send join or leave message based on whether other peer is connected
-      header: [status, did],
-      body: new Uint8Array(),
-    });
+  sendJoinLeave(status: "join" | "leave", did: string, connId?: string) {
+    this.socket.send(
+      encodeRawMessage<RouterMessageHeader>({
+        // Send join or leave message based on whether other peer is connected
+        header: [status, did, connId],
+        body: new Uint8Array(),
+      })
+    );
   }
 
   /** Send a message to this peer. */
-  sendData(from: string, data: Uint8Array) {
+  sendData(fromDid: string, connId: string, data: Uint8Array) {
     this.socket.send(
       encodeRawMessage<RouterMessageHeader>({
-        header: ["send", from],
+        header: ["send", fromDid, connId],
         body: data,
       })
     );
@@ -149,32 +159,48 @@ router.get("/connect/as/:did", async (req) => {
 
   // Load the token and make sure the DID matches to make sure it's valid.
   const tokenDid = (await kv.get<string>(["tokens", token])).value;
+
   if (did !== tokenDid && !(unsafeDevToken && token === unsafeDevToken))
     return error(403, "Token invalid or expired");
+
+  // Generate a connection ID
+  const connId = encodeBase32(
+    crypto.getRandomValues(new Uint8Array(8)),
+    "Crockford"
+  );
 
   // Upgrade to websocket connection
   const { socket, response } = Deno.upgradeWebSocket(req);
 
   socket.addEventListener("open", () => {
     // Add the newly connected peer to our peers list
-    peers[did] = new Peer(did, socket);
+    const connections = peerConns[did];
+    if (!connections) peerConns[did] = {};
+    peerConns[did][connId] = new Peer(did, connId, socket);
+    console.info(`New peer connected: ${did}(${connId})`);
 
     // Notify any other peers that are listening for this peer's status.
-    for (const peer of Object.values(peers)) {
-      if (peer.listeningTo.includes(did)) {
-        peer.sendJoinLeave(did, "join");
+    for (const conns of Object.values(peerConns)) {
+      for (const conn of Object.values(conns)) {
+        if (conn.listeningTo.includes(did)) {
+          conn.sendJoinLeave("join", did, connId);
+        }
       }
     }
   });
 
   socket.addEventListener("close", () => {
     // Remove the peer from our connected peers list
-    delete peers[did];
+    const conns = peerConns[did] || {};
+    delete conns[connId];
+    console.info(`Peer disconnected: ${did}(${connId})`);
 
     // Notify any other peers that are listening for this peer's status.
-    for (const peer of Object.values(peers)) {
-      if (peer.listeningTo.includes(did)) {
-        peer.sendJoinLeave(did, "leave");
+    for (const conns of Object.values(peerConns)) {
+      for (const conn of Object.values(conns)) {
+        if (conn.listeningTo.includes(did)) {
+          conn.sendJoinLeave("leave", did, connId);
+        }
       }
     }
   });
