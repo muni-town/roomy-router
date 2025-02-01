@@ -10,7 +10,7 @@ const args = parseArgs(Deno.args, {
 const [url] = args._ as [string];
 const token = args.token;
 
-console.log(`Conneccting to ${url}`);
+console.log(`Connecting to ${url}`);
 
 let error = false;
 while (true) {
