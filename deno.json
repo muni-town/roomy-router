@@ -1,6 +1,7 @@
 {
   "name": "@roomy-chat/router",
   "version": "0.1.0-alpha.1",
+  "license": "BlueOak-1.0.0",
   "tasks": {
     "dev": "env DID=test UNSAFE_DEV_TOKEN=token deno run --watch -A --unstable-kv main.ts",
     "cli": "deno run -A client-cli.ts"
