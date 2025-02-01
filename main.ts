@@ -5,7 +5,7 @@ import encodeBase32 from "base32-encode";
 import {
   encodeRawMessage,
   parsePeerMessage,
-  RouterMessageHeader,
+  type RouterMessageHeader,
 } from "./encoding.ts";
 
 // Open the key-value database
