@@ -1,7 +1,7 @@
 import {
   encodeRawMessage,
   parseRouterMessage,
-  PeerMessageHeader,
+  type PeerMessageHeader,
 } from "./encoding.ts";
 
 type RouterClientCallbacks = {
