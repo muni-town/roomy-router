@@ -165,8 +165,6 @@ router.get("/connect/as/:did", async (req) => {
   if (did !== tokenDid && !(unsafeDevToken && token === unsafeDevToken))
     return error(403, "Token invalid or expired");
 
-  console.info(`Opened connection for: ${did}`);
-
   // Generate a connection ID
   const connId = encodeBase32(
     crypto.getRandomValues(new Uint8Array(8)),
@@ -174,7 +172,9 @@ router.get("/connect/as/:did", async (req) => {
   );
 
   // Upgrade to websocket connection
-  const { socket, response } = Deno.upgradeWebSocket(req);
+  const { socket, response } = Deno.upgradeWebSocket(req, {
+    protocol: "authorization",
+  });
 
   socket.addEventListener("open", () => {
     // Add the newly connected peer to our peers list
