@@ -247,7 +247,7 @@ router.all("*", async (ctx) => {
 });
 
 // Get an access token that can be used to open up a WebSocket connection to the router.
-router.get("/xrpc/town.muni.roomy.v0.router.token", async ({ did }: Ctx) => {
+router.get("/xrpc/chat.roomy.v0.router.token", async ({ did }: Ctx) => {
   // Generate a new token
   const token = encodeBase32(
     crypto.getRandomValues(new Uint8Array(32)),
