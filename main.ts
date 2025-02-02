@@ -165,6 +165,8 @@ router.get("/connect/as/:did", async (req) => {
   if (did !== tokenDid && !(unsafeDevToken && token === unsafeDevToken))
     return error(403, "Token invalid or expired");
 
+  console.info(`Opened connection for: ${did}`);
+
   // Generate a connection ID
   const connId = encodeBase32(
     crypto.getRandomValues(new Uint8Array(8)),
