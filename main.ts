@@ -33,6 +33,7 @@ const router = AutoRouter({
 
 // Parse configuration environment variables.
 const serviceDid = Deno.env.get("DID");
+const serviceEndpoint = Deno.env.get("PUBLIC_URL");
 const unsafeDevToken = Deno.env.get("UNSAFE_DEV_TOKEN");
 
 if (!serviceDid)
@@ -49,6 +50,7 @@ router.get("/.well-known/did.json", ({ url }) => ({
       id: "#roomy_router",
       type: "RoomyRouter",
       serviceEndpoint: (() => {
+        if (serviceEndpoint) return serviceEndpoint;
         const u = new URL(url);
         u.pathname = "/";
         return u.href;
