@@ -258,6 +258,10 @@ router.get("/xrpc/chat.roomy.v0.router.token", async ({ did }: Ctx) => {
   await kv.set(["tokens", token], did, {
     expireIn: 30000,
   });
+
+  return {
+    token,
+  };
 });
 
 Deno.serve(router.fetch);
