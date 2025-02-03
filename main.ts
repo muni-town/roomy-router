@@ -111,11 +111,13 @@ class Peer {
       }
     }
 
+    // The issue is the receive hook has the wrong connection ID, not showing the connection it's coming from, but the connection it's going to.
+
     // Sending another peer a message
     else if (kind == "send") {
       const [did, connId] = params;
       // Forward data to the other peer's connection
-      peerConns[did]?.[connId]?.sendData(this.did, connId, data);
+      peerConns[did]?.[connId]?.sendData(this.did, this.connId, data);
     }
   }
 
