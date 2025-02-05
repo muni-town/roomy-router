@@ -3,31 +3,80 @@ import {
   parseRouterMessage,
   type PeerMessageHeader,
 } from "./encoding.ts";
+import { TypedEventTarget } from "@derzade/typescript-event-target";
 
-type RouterClientCallbacks = {
-  open?: () => void;
-  close?: () => void;
-  join?: (did: string, connId: string) => void;
-  leave?: (did: string, connId?: string) => void;
-  receive?: (did: string, connId: string, data: Uint8Array) => void;
-  error?: (e: Event) => void;
-};
+function getOrDefault<K, V>(map: Map<K, V>, key: K, defaultValue: V): V {
+  if (!map.has(key)) {
+    map.set(key, defaultValue);
+  }
+  return map.get(key)!;
+}
 
-export class RouterClient {
+export class JoinEvent extends Event {
+  did: string;
+  connId: string;
+  docId: string;
+  constructor(did: string, connId: string, docId: string) {
+    super("join");
+    this.did = did;
+    this.connId = connId;
+    this.docId = docId;
+  }
+}
+
+export class LeaveEvent extends Event {
+  did: string;
+  connId: string;
+  docId: string;
+  constructor(did: string, connId: string, docId: string) {
+    super("leave");
+    this.did = did;
+    this.connId = connId;
+    this.docId = docId;
+  }
+}
+
+export class DataEvent extends Event {
+  did: string;
+  connId: string;
+  docId: string;
+  data: Uint8Array;
+  constructor(did: string, connId: string, docId: string, data: Uint8Array) {
+    super("data");
+    this.did = did;
+    this.connId = connId;
+    this.docId = docId;
+    this.data = data;
+  }
+}
+
+export interface RouterClientEventMap {
+  open: Event;
+  close: Event;
+  join: JoinEvent;
+  leave: LeaveEvent;
+  data: DataEvent;
+  error: Event;
+}
+
+export interface Member {
+  did: string;
+  connId: string;
+}
+
+export type DocId = string;
+
+export class RouterClient extends TypedEventTarget<RouterClientEventMap> {
   socket: WebSocket;
-  callbacks: RouterClientCallbacks;
   open: Promise<void>;
   listeningTo: string[] = [];
-  knownConnections: { [did: string]: string[] } = {};
+  interests: Map<DocId, Member[]> = new Map();
 
-  constructor(
-    token: string,
-    url: string,
-    callbacks: RouterClientCallbacks = {}
-  ) {
+  constructor(token: string, url: string) {
+    super();
+
     this.socket = new WebSocket(url, ["authorization", token]);
     this.socket.binaryType = "arraybuffer";
-    this.callbacks = callbacks;
 
     this.socket.addEventListener("message", (e) => {
       if (e.data instanceof ArrayBuffer) {
@@ -37,27 +86,24 @@ export class RouterClient {
       }
     });
     this.socket.addEventListener("error", (e) => {
-      if (this.callbacks.error) this.callbacks.error(e);
+      this.dispatchTypedEvent("error", e);
     });
     this.socket.addEventListener("close", () => {
-      if (this.callbacks.close) this.callbacks.close();
+      this.dispatchTypedEvent("close", new Event("close"));
     });
 
     this.open = new Promise((resolve) => {
       this.socket.addEventListener("open", () => {
-        if (this.callbacks.open) this.callbacks.open();
+        this.dispatchTypedEvent("open", new Event("open"));
         resolve();
       });
     });
   }
 
-  listen(...dids: string[]) {
-    this.listeningTo = [...new Set(dids)];
-    const oldConns = { ...this.knownConnections };
-    this.knownConnections = {};
-    this.listeningTo.forEach((did) => {
-      this.knownConnections[did] = oldConns[did] || [];
-    });
+  setListening(docIds: DocId[]) {
+    for (const docId of docIds) {
+      if (!this.interests.has(docId)) this.interests.set(docId, []);
+    }
 
     this.socket.send(
       encodeRawMessage<PeerMessageHeader>({
@@ -67,19 +113,10 @@ export class RouterClient {
     );
   }
 
-  ask(did: string) {
+  send(did: string, connId: string, docId: DocId, data: Uint8Array) {
     this.socket.send(
       encodeRawMessage<PeerMessageHeader>({
-        header: ["ask", did],
-        body: new Uint8Array(),
-      })
-    );
-  }
-
-  send(did: string, connId: string, data: Uint8Array) {
-    this.socket.send(
-      encodeRawMessage<PeerMessageHeader>({
-        header: ["send", did, connId],
+        header: ["send", did, connId, docId],
         body: data,
       })
     );
@@ -91,20 +128,26 @@ export class RouterClient {
       console.warn(`Error parsing router message.`);
       return;
     }
-    const [[kind, did, connId], data] = msg;
+    const [header, data] = msg;
 
-    if (kind == "join" && this.callbacks.join) {
-      const conns = this.knownConnections[did] || [];
-      conns.push(connId!);
-      this.knownConnections[did] = conns;
-
-      this.callbacks.join(did, connId!);
-    } else if (kind == "leave" && this.callbacks.leave) {
-      this.knownConnections[did] =
-        this.knownConnections[did]?.filter((x) => x !== connId) || [];
-      this.callbacks.leave(did, connId || undefined);
-    } else if (kind == "send" && this.callbacks.receive) {
-      this.callbacks.receive(did, connId!, data);
+    if (header[0] == "join") {
+      const [_, did, connId, docId] = header;
+      const interestedConnections = getOrDefault(this.interests, docId, []);
+      interestedConnections.push({ connId, did });
+      this.dispatchTypedEvent("join", new JoinEvent(did, connId, docId));
+    } else if (header[0] == "leave") {
+      const [_, did, connId, docId] = header;
+      const interestedConnections = getOrDefault(this.interests, docId, []);
+      this.interests.set(
+        docId,
+        interestedConnections.filter(
+          (x) => x.connId !== connId || x.did !== did
+        )
+      );
+      this.dispatchTypedEvent("leave", new LeaveEvent(did, connId, docId));
+    } else if (header[0] == "send") {
+      const [_, did, connId, docId] = header;
+      this.dispatchTypedEvent("data", new DataEvent(did, connId, docId, data));
     }
   }
 }

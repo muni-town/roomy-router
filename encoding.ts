@@ -1,24 +1,53 @@
 import { z } from "zod";
 
 export type RouterMessageHeader = z.infer<typeof routerMessageHeader>;
-export const routerMessageHeader = z.tuple([
-  // The kind of message
-  z.literal("join").or(z.literal("leave")).or(z.literal("send")),
-  // The DID of the peer involved
-  z.string(),
-  // The connection ID involved
-  z.optional(z.nullable(z.string())),
+export const routerMessageHeader = z.union([
+  z.tuple([
+    // The kind of message
+    z.literal("join"),
+    // The DID of the peer involved
+    z.string(),
+    // The connection ID involved
+    z.string(),
+    // The document ID that they are joining
+    z.string(),
+  ]),
+  z.tuple([
+    // The kind of message
+    z.literal("leave"),
+    // The DID of the peer involved
+    z.string(),
+    // The connection that has left ( or all of them if null)
+    z.string(),
+    // The document ID that they are leaving ( or all of them if null )
+    z.string(),
+  ]),
+  z.tuple([
+    // The kind of message
+    z.literal("send"),
+    // The DID of the peer involved
+    z.string(),
+    // The connection ID involved
+    z.string(),
+    // The document ID the message is about
+    z.string(),
+  ]),
 ]);
 
 export type PeerMessageHeader = z.infer<typeof peerMessageHeader>;
 export const peerMessageHeader = z.union([
-  // Sets the peers that this peer is interested in getting "join" and "leave" messages from.
+  // Sets the DocIds that this peer is interested in getting "join" and "leave" messages from.
   z.tuple([z.literal("listen")]).rest(z.string()),
   // Sends a message to another peer's ( did, connectionId )
-  z.tuple([z.literal("send"), z.string(), z.string()]),
-  // Asks whether another user is online without adding them to the "listen" list.
-  // This will cause a "join" or "leave" message to be sent back by the router.
-  z.tuple([z.literal("ask"), z.string()]),
+  z.tuple([
+    z.literal("send"),
+    // The other peer's DID
+    z.string(),
+    // The other peer's connection ID
+    z.string(),
+    // The DocID the message is about
+    z.string(),
+  ]),
 ]);
 
 export type RawMessage<T> = {

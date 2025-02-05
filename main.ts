@@ -1,7 +1,8 @@
 import { AutoRouter, cors, error } from "itty-router";
-import { verifyJwt, XRPCError } from "@atproto/xrpc-server";
+import { verifyJwt } from "@atproto/xrpc-server";
 import { IdResolver } from "@atproto/identity";
 import encodeBase32 from "base32-encode";
+import { ulid } from "ulidx";
 import {
   encodeRawMessage,
   parsePeerMessage,
@@ -59,16 +60,28 @@ router.get("/.well-known/did.json", ({ url }) => ({
   ],
 }));
 
-/** All of the open peer connections. */
-const peerConns: { [did: string]: { [connId: string]: Peer } } = {};
+function getOrDefault<K, V>(map: Map<K, V>, key: K, defaultValue: V): V {
+  if (!map.has(key)) {
+    map.set(key, defaultValue);
+  }
+  return map.get(key)!;
+}
+
+type DocId = string;
+type Ulid = string;
+const globalInterests: Map<DocId, Set<Ulid>> = new Map();
+const globalConnections: Map<Ulid, Connection> = new Map();
 
 /** Handles the connection to a peer. */
-class Peer {
+class Connection {
+  /** The websocket backing the connection */
   socket: WebSocket;
+  /** The DID of the authenticated user of the connection. */
   did: string;
-  connId: string;
-  /** The list of DIDs that the user wants to receive "join" and "leave" messages for. */
-  listeningTo: string[] = [];
+  /** The connection's unique ID. */
+  connId: Ulid;
+  /** the list of document IDs that this connection is interested in. */
+  interests: Set<DocId> = new Set();
 
   constructor(did: string, connId: string, socket: WebSocket) {
     this.did = did;
@@ -91,54 +104,97 @@ class Peer {
       console.warn(`Error parsing message for ${this.did}`);
       return;
     }
-    const [[kind, ...params], data] = msg;
+    const [header, data] = msg;
 
-    // Setting the peers this peer should receive status updates for
-    if (kind == "listen") {
-      this.listeningTo = params;
-    }
+    // Set the documents that we are listening to
+    if (header[0] == "listen") {
+      const newInterests = new Set(header.slice(1));
 
-    // Asking for other peer's status
-    else if (kind == "ask") {
-      const [did] = params;
-      const allConnections = peerConns[did];
-      const connections = Object.values(allConnections || {}).filter(
-        (x) => did != this.did || x.connId != this.connId
-      );
-      if (connections.length == 0) {
-        this.sendJoinLeave("leave", did);
-      } else {
-        for (const connId of connections.map((x) => x.connId)) {
-          this.sendJoinLeave("join", did, connId);
+      // Remove any of the removed interests from the global interests list
+      const removedInterests = this.interests.difference(newInterests);
+      for (const docId of removedInterests) {
+        // Get the list of connections interested in this document
+        const interestedConnections = getOrDefault(
+          globalInterests,
+          docId,
+          new Set()
+        );
+        // Remove this connection from those interested in this doc
+        interestedConnections.delete(this.connId);
+        // For every _other_ connection interested in this doc
+        for (const interestedConnectionId of interestedConnections) {
+          // Get the connection
+          const connection = globalConnections.get(interestedConnectionId);
+          if (connection) {
+            // And tell it that we are leaving the document
+            connection.sendHeader(["leave", this.did, this.connId, docId]);
+          } else {
+            // Shouldn't happen, but just in case.
+            globalConnections.delete(interestedConnectionId);
+          }
         }
       }
+
+      // Add any new interests
+      const addedInterests = newInterests.difference(this.interests);
+      // For every added document we are interested in
+      for (const docId of addedInterests) {
+        const interestedConnections = getOrDefault(
+          globalInterests,
+          docId,
+          new Set()
+        );
+        // For every other connection that is interested
+        for (const interestedConnectionId of interestedConnections) {
+          // Get the connection
+          const connection = globalConnections.get(interestedConnectionId);
+          if (connection) {
+            // And tell it that we are joining the document
+            connection.sendHeader(["join", this.did, this.connId, docId]);
+          } else {
+            // Shouldn't happen, but just in case
+            globalConnections.delete(interestedConnectionId);
+          }
+        }
+
+        // Add our connection to the list of those interested
+        interestedConnections.add(this.connId);
+      }
+
+      // Update interests
+      this.interests = newInterests;
     }
 
     // Sending another peer a message
-    else if (kind == "send") {
-      const [did, connId] = params;
+    else if (header[0] == "send") {
+      const [_, did, connId, docId] = header;
       if (did !== this.did || connId !== this.connId) {
-        // Forward data to the other peer's connection
-        peerConns[did]?.[connId]?.sendData(this.did, this.connId, data);
+        // Get the connection we are trying to send to
+        const connection = globalConnections.get(connId);
+        if (!connection) return;
+        if (connection.did != did) return; // Don't send message if DID is unexpected.
+
+        // Send data
+        connection.sendData(this.did, this.connId, docId, data);
       }
     }
   }
 
-  sendJoinLeave(status: "join" | "leave", did: string, connId?: string) {
+  sendHeader(header: RouterMessageHeader) {
     this.socket.send(
       encodeRawMessage<RouterMessageHeader>({
         // Send join or leave message based on whether other peer is connected
-        header: [status, did, connId],
+        header,
         body: new Uint8Array(),
       })
     );
   }
 
   /** Send a message to this peer. */
-  sendData(fromDid: string, connId: string, data: Uint8Array) {
+  sendData(fromDid: string, connId: string, docId: DocId, data: Uint8Array) {
     this.socket.send(
       encodeRawMessage<RouterMessageHeader>({
-        header: ["send", fromDid, connId],
+        header: ["send", fromDid, connId, docId],
         body: data,
       })
     );
@@ -171,10 +227,7 @@ router.get("/connect/as/:did", async (req) => {
     return error(403, "Token invalid or expired");
 
   // Generate a connection ID
-  const connId = encodeBase32(
-    crypto.getRandomValues(new Uint8Array(8)),
-    "Crockford"
-  );
+  const connId = ulid();
 
   // Upgrade to websocket connection
   const { socket, response } = Deno.upgradeWebSocket(req, {
@@ -182,36 +235,30 @@ router.get("/connect/as/:did", async (req) => {
   });
 
   socket.addEventListener("open", () => {
-    // Add the newly connected peer to our peers list
-    const connections = peerConns[did];
-    if (!connections) peerConns[did] = {};
-    peerConns[did][connId] = new Peer(did, connId, socket);
-    console.info(`New peer connected: ${did}(${connId})`);
-
-    // Notify any other peers that are listening for this peer's status.
-    for (const conns of Object.values(peerConns)) {
-      for (const conn of Object.values(conns)) {
-        if (conn.listeningTo.includes(did)) {
-          conn.sendJoinLeave("join", did, connId);
-        }
-      }
-    }
+    // Add new connection to the connection list
+    const connection = new Connection(did, connId, socket);
+    console.info(`New connection: ${did}(${connId})`);
+    globalConnections.set(connId, connection);
   });
 
   socket.addEventListener("close", () => {
-    // Remove the peer from our connected peers list
-    const conns = peerConns[did] || {};
-    delete conns[connId];
-    console.info(`Peer disconnected: ${did}(${connId})`);
+    const connection = globalConnections.get(connId);
+    if (!connection) return;
 
-    // Notify any other peers that are listening for this peer's status.
-    for (const conns of Object.values(peerConns)) {
-      for (const conn of Object.values(conns)) {
-        if (conn.listeningTo.includes(did)) {
-          conn.sendJoinLeave("leave", did, connId);
+    // Loop over documents that we were interested in
+    for (const docId of connection.interests) {
+      // For every other connection interested in this doc
+      for (const interestedConnId of globalInterests.get(docId) || new Set()) {
+        const connection = globalConnections.get(interestedConnId);
+        if (connection) {
+          connection.sendHeader(["leave", did, connId, docId]);
+        } else {
+          globalConnections.delete(interestedConnId);
         }
       }
     }
+
+    console.info(`Peer disconnected: ${did}(${connId})`);
   });
 
   return response;
