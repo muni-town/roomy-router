@@ -106,12 +106,12 @@ class Peer {
         this.sendJoinLeave("leave", did);
       } else {
         for (const connId of Object.keys(connections)) {
-          this.sendJoinLeave("join", did, connId);
+          if (connId !== this.connId && did !== this.did) {
+            this.sendJoinLeave("join", did, connId);
+          }
         }
       }
     }
-
-    // The issue is the receive hook has the wrong connection ID, not showing the connection it's coming from, but the connection it's going to.
 
     // Sending another peer a message
     else if (kind == "send") {
@@ -122,23 +122,27 @@ class Peer {
   }
 
   sendJoinLeave(status: "join" | "leave", did: string, connId?: string) {
-    this.socket.send(
-      encodeRawMessage<RouterMessageHeader>({
-        // Send join or leave message based on whether other peer is connected
-        header: [status, did, connId],
-        body: new Uint8Array(),
-      })
-    );
+    if (connId !== this.connId && did !== this.did) {
+      this.socket.send(
+        encodeRawMessage<RouterMessageHeader>({
+          // Send join or leave message based on whether other peer is connected
+          header: [status, did, connId],
+          body: new Uint8Array(),
+        })
+      );
+    }
   }
 
   /** Send a message to this peer. */
   sendData(fromDid: string, connId: string, data: Uint8Array) {
-    this.socket.send(
-      encodeRawMessage<RouterMessageHeader>({
-        header: ["send", fromDid, connId],
-        body: data,
-      })
-    );
+    if (connId !== this.connId && fromDid !== this.did) {
+      this.socket.send(
+        encodeRawMessage<RouterMessageHeader>({
+          header: ["send", fromDid, connId],
+          body: data,
+        })
+      );
+    }
   }
 }
 
