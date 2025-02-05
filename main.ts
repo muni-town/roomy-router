@@ -1,5 +1,5 @@
 import { AutoRouter, cors, error } from "itty-router";
-import { verifyJwt } from "@atproto/xrpc-server";
+import { verifyJwt, XRPCError } from "@atproto/xrpc-server";
 import { IdResolver } from "@atproto/identity";
 import encodeBase32 from "base32-encode";
 import {
@@ -101,14 +101,15 @@ class Peer {
     // Asking for other peer's status
     else if (kind == "ask") {
       const [did] = params;
-      const connections = peerConns[did];
-      if (Object.keys(connections || {}).length == 0) {
+      const allConnections = peerConns[did];
+      const connections = Object.values(allConnections || {}).filter(
+        (x) => did != this.did || x.connId != this.connId
+      );
+      if (connections.length == 0) {
         this.sendJoinLeave("leave", did);
       } else {
-        for (const connId of Object.keys(connections)) {
-          if (connId !== this.connId && did !== this.did) {
-            this.sendJoinLeave("join", did, connId);
-          }
+        for (const connId of connections.map((x) => x.connId)) {
+          this.sendJoinLeave("join", did, connId);
         }
       }
     }
@@ -116,33 +117,31 @@ class Peer {
     // Sending another peer a message
     else if (kind == "send") {
       const [did, connId] = params;
-      // Forward data to the other peer's connection
-      peerConns[did]?.[connId]?.sendData(this.did, this.connId, data);
+      if (did !== this.did || connId !== this.connId) {
+        // Forward data to the other peer's connection
+        peerConns[did]?.[connId]?.sendData(this.did, this.connId, data);
+      }
     }
   }
 
   sendJoinLeave(status: "join" | "leave", did: string, connId?: string) {
-    if (connId !== this.connId && did !== this.did) {
-      this.socket.send(
-        encodeRawMessage<RouterMessageHeader>({
-          // Send join or leave message based on whether other peer is connected
-          header: [status, did, connId],
-          body: new Uint8Array(),
-        })
-      );
-    }
+    this.socket.send(
+      encodeRawMessage<RouterMessageHeader>({
+        // Send join or leave message based on whether other peer is connected
+        header: [status, did, connId],
+        body: new Uint8Array(),
+      })
+    );
   }
 
   /** Send a message to this peer. */
   sendData(fromDid: string, connId: string, data: Uint8Array) {
-    if (connId !== this.connId && fromDid !== this.did) {
-      this.socket.send(
-        encodeRawMessage<RouterMessageHeader>({
-          header: ["send", fromDid, connId],
-          body: data,
-        })
-      );
-    }
+    this.socket.send(
+      encodeRawMessage<RouterMessageHeader>({
+        header: ["send", fromDid, connId],
+        body: data,
+      })
+    );
   }
 }
 
