@@ -71,7 +71,7 @@ export class RouterClient extends TypedEventTarget<RouterClientEventMap> {
   open: Promise<void>;
   #interests: Map<DocId, Member[]> = new Map();
 
-  get interests() {
+  get interests(): Map<DocId, Member[]> {
     return this.#interests;
   }
 
