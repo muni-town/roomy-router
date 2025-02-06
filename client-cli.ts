@@ -45,7 +45,7 @@ while (true) {
     if (!did) continue;
 
     if (!client.listeningTo.includes(did)) {
-      client.setListening(did, ...client.listeningTo);
+      client.addInterests(did, ...client.listeningTo);
       client.ask(did);
     }
 

@@ -69,8 +69,11 @@ export type DocId = string;
 export class RouterClient extends TypedEventTarget<RouterClientEventMap> {
   socket: WebSocket;
   open: Promise<void>;
-  listeningTo: string[] = [];
-  interests: Map<DocId, Member[]> = new Map();
+  #interests: Map<DocId, Member[]> = new Map();
+
+  get interests() {
+    return this.#interests;
+  }
 
   constructor(token: string, url: string) {
     super();
@@ -100,14 +103,27 @@ export class RouterClient extends TypedEventTarget<RouterClientEventMap> {
     });
   }
 
-  setListening(docIds: DocId[]) {
+  removeInterests(...docIds: DocId[]) {
     for (const docId of docIds) {
-      if (!this.interests.has(docId)) this.interests.set(docId, []);
+      if (!this.#interests.has(docId)) this.#interests.delete(docId);
     }
 
     this.socket.send(
       encodeRawMessage<PeerMessageHeader>({
-        header: ["listen", ...this.listeningTo],
+        header: ["listen", ...this.#interests.keys()],
+        body: new Uint8Array(),
+      })
+    );
+  }
+
+  addInterests(...docIds: DocId[]) {
+    for (const docId of docIds) {
+      if (!this.#interests.has(docId)) this.#interests.set(docId, []);
+    }
+
+    this.socket.send(
+      encodeRawMessage<PeerMessageHeader>({
+        header: ["listen", ...this.#interests.keys()],
         body: new Uint8Array(),
       })
     );
@@ -132,13 +148,13 @@ export class RouterClient extends TypedEventTarget<RouterClientEventMap> {
 
     if (header[0] == "join") {
       const [_, did, connId, docId] = header;
-      const interestedConnections = getOrDefault(this.interests, docId, []);
+      const interestedConnections = getOrDefault(this.#interests, docId, []);
       interestedConnections.push({ connId, did });
       this.dispatchTypedEvent("join", new JoinEvent(did, connId, docId));
     } else if (header[0] == "leave") {
       const [_, did, connId, docId] = header;
-      const interestedConnections = getOrDefault(this.interests, docId, []);
-      this.interests.set(
+      const interestedConnections = getOrDefault(this.#interests, docId, []);
+      this.#interests.set(
         docId,
         interestedConnections.filter(
           (x) => x.connId !== connId || x.did !== did
