@@ -151,6 +151,9 @@ class Connection {
           if (connection) {
             // And tell it that we are joining the document
             connection.sendHeader(["join", this.did, this.connId, docId]);
+
+            // Also tell this peer about the other peer with the same interest
+            this.sendHeader(["join", connection.did, connection.connId, docId]);
           } else {
             // Shouldn't happen, but just in case
             globalConnections.delete(interestedConnectionId);
