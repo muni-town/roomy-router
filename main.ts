@@ -240,7 +240,7 @@ router.get("/connect/as/:did", async (req) => {
   socket.addEventListener("open", () => {
     // Add new connection to the connection list
     const connection = new Connection(did, connId, socket);
-    console.info(`New connection: ${did}(${connId})`);
+    console.info(`Peer connected   : ${did}(${connId})`);
     globalConnections.set(connId, connection);
   });
 
@@ -250,6 +250,9 @@ router.get("/connect/as/:did", async (req) => {
 
     // Loop over documents that we were interested in
     for (const docId of connection.interests) {
+      // Remove this connection from the interested connections
+      globalInterests.get(docId)?.delete(connId);
+
       // For every other connection interested in this doc
       for (const interestedConnId of globalInterests.get(docId) || new Set()) {
         const connection = globalConnections.get(interestedConnId);
