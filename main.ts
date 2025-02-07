@@ -2,6 +2,7 @@ import { AutoRouter, cors, error } from "itty-router";
 import { verifyJwt } from "@atproto/xrpc-server";
 import { IdResolver } from "@atproto/identity";
 import encodeBase32 from "base32-encode";
+import { AtprotoHandleResolver } from "@atproto-labs/handle-resolver";
 import { ulid } from "ulidx";
 import {
   encodeRawMessage,
@@ -268,6 +269,21 @@ router.get("/connect/as/:did", async (req) => {
   });
 
   return response;
+});
+
+const resolver = new AtprotoHandleResolver({
+  async resolveTxt(hostname) {
+    return (await Deno.resolveDns(hostname, "TXT")).flat();
+  },
+  fetch,
+});
+router.get("/xrpc/com.atproto.identity.resolveHandle", async ({ query }) => {
+  const { handle } = query;
+  if (typeof handle !== "string" || !handle)
+    return error(400, "handle query parameter required");
+  const did: string | null = await resolver.resolve(handle);
+  if (!did) return error(404, `Could not resolve handle to DID: ${handle}`);
+  return { did };
 });
 
 //

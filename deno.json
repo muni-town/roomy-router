@@ -11,6 +11,7 @@
     "./client": "./client.ts"
   },
   "imports": {
+    "@atproto-labs/handle-resolver": "npm:@atproto-labs/handle-resolver@^0.1.7",
     "@atproto/identity": "npm:@atproto/identity@^0.4.5",
     "@atproto/xrpc-server": "npm:@atproto/xrpc-server@^0.7.8",
     "@cliffy/prompt": "jsr:@cliffy/prompt@1.0.0-rc.7",
